@@ -6,6 +6,8 @@
 # 4d-plugin-ULID
 ULID↔UUID converter 
 
+based on [suyash/ulid](https://github.com/suyash/ulid)
+
 ## usage
 
 ```4d
