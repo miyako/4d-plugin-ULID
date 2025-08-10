@@ -1,3 +1,7 @@
 ULID/test/userPreferences.*
 ULID/build/*
 ULID/test/Project/DerivedData/*
+ULID/.vs/*
+ULID/Objs/*
+ULID/test/Plugins/ULID.bundle/Contents/Windows64/ULID.exp
+ULID/test/Plugins/ULID.bundle/Contents/Windows64/ULID.lib

@@ -22,6 +22,7 @@
 
 #include <ulid.hh>
 
+#include <array>
 #include <iostream>
 #include <sstream>
 #include <iomanip>

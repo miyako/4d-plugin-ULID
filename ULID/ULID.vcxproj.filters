@@ -23,6 +23,9 @@
       <Filter>4D Plugin API</Filter>
     </ClInclude>
     <ClInclude Include="4DPlugin-ULID.h" />
+    <ClInclude Include="suyash\ulid.hh" />
+    <ClInclude Include="suyash\ulid_struct.hh" />
+    <ClInclude Include="suyash\ulid_uint128.hh" />
   </ItemGroup>
   <ItemGroup>
     <Filter Include="4D Plugin API">
