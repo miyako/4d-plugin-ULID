@@ -1,0 +1,22 @@
+{
+    "name": "ULID",
+    "id": 20000,
+    "commands": [
+        {
+            "theme": "ULID",
+            "syntax": "ULID from UUID(&T):T",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID to UUID(&T):T",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "Generate ULID(&T):T",
+            "threadSafe": true
+        }
+        
+    ]
+}
