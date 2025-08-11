@@ -29,10 +29,14 @@
 #include <string>
 #include <cstdint>
 
+#include <time.h>
+
 #pragma mark -
 
 static void ULID_from_UUID(PA_PluginParameters params);
 static void ULID_to_UUID(PA_PluginParameters params);
 static void Generate_ULID(PA_PluginParameters params);
+static void ULID_Get_timestamp(PA_PluginParameters params);
+static void ULID_Set_timestamp(PA_PluginParameters params);
 
 #endif /* PLUGIN_ULID_H */

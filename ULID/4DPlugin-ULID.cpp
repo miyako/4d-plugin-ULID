@@ -32,6 +32,12 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             case 3 :
                 Generate_ULID(params);
                 break;
+            case 4 :
+                ULID_Get_timestamp(params);
+                break;
+            case 5 :
+                ULID_Set_timestamp(params);
+                break;
 
         }
 
@@ -178,6 +184,135 @@ static void Generate_ULID(PA_PluginParameters params) {
     ulid::ULID ulid;
     ulid::EncodeTimeSystemClockNow(ulid);
     ulid::EncodeEntropyMt19937(generator, ulid);
+    
+    std::string str = ulid::Marshal(ulid);
+    toUstr(str, returnValue);
+    
+    PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
+}
+
+static const char *CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+static int decode_crockford_char(char c) {
+    const char *p = strchr(CROCKFORD_ALPHABET, c);
+    return p ? (int)(p - CROCKFORD_ALPHABET) : -1;
+}
+
+/*
+static uint64_t ulid_decode_timestamp_ms(std::string& str) {
+        
+    if (str.length() < 10) return 0;
+    
+    uint64_t total = 0;
+    
+    // Each char = 5 bits; first 10 chars = 50 bits total
+    for (int i = 0; i < 10; i++) {
+        int val = decode_crockford_char(str.at(i));
+        if (val < 0) return 0;
+        total = (total << 5) | (uint64_t)val;
+
+        std::cout << "Step " << i << ": char='" << str[i] << "' val=" << val
+                         << " total=0x" << std::hex << total << std::dec << " (" << total << ")\n";
+           
+    }
+    
+    // Timestamp is the top 48 bits; discard the lowest 2 bits
+    return total >> 2;
+}
+*/
+
+static std::string ms_to_iso8601(uint64_t ms) {
+
+    time_t t = (time_t)(ms / 1000);
+    long msec = (long)(ms % 1000);
+
+    struct tm tm_utc;
+
+#if defined(_WIN32)
+    gmtime_s(&tm_utc, &t);
+#else
+    gmtime_r(&t, &tm_utc);
+#endif
+    
+    char tm_str[20];//19+1
+    if(strftime(tm_str, sizeof(tm_str), "%Y-%m-%dT%H:%M:%S", &tm_utc) == 19){
+        char iso_str[25];//24+1
+        if(snprintf(iso_str, sizeof(iso_str), "%s.%03ldZ", tm_str, msec) == 24) {
+            return std::string(iso_str, sizeof(iso_str));
+        }
+    }
+
+    return "";
+}
+
+static uint64_t ms_to_iso8601_to_ms(const std::string& iso) {
+    
+    std::tm tm = {};
+        int milliseconds = 0;
+    
+    std::istringstream ss(iso);
+    ss >> std::get_time(&tm, "%Y-%m-%dT%H:%M:%S");
+    
+    if (!ss.fail()) {
+        // Parse milliseconds if present
+            if (ss.peek() == '.') {
+                ss.get(); // consume '.'
+                char ms_str[4] = {'0', '0', '0', '\0'};
+                ss.read(ms_str, 3);
+                milliseconds = std::stoi(ms_str);
+            }
+        
+        // Assume 'Z' at end (UTC)
+        // Convert tm to time_t (seconds since epoch)
+#if defined(_WIN32) || defined(_WIN64)
+        time_t time_sec = _mkgmtime(&tm);
+#else
+        time_t time_sec = timegm(&tm);
+#endif
+
+        if (time_sec != -1) {
+            return static_cast<int64_t>(time_sec) * 1000 + milliseconds;
+        }
+    }
+    
+    return 0;
+}
+
+static void ULID_Get_timestamp(PA_PluginParameters params) {
+    
+    PA_Unistring *ustr = PA_GetStringParameter(params, 1);
+    CUTF16String returnValue;
+
+    CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+    std::string u8;
+    fromUstr(u16 ,u8);
+    
+    ulid::ULID ulid = ulid::Unmarshal(u8);
+    time_t ms = ulid::Time(ulid);//not really time_t
+
+    std::string str = ms_to_iso8601(ms);
+    toUstr(str, returnValue);
+    
+    PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
+}
+
+static void ULID_Set_timestamp(PA_PluginParameters params) {
+    
+    PA_Unistring *ustr = PA_GetStringParameter(params, 2);
+    CUTF16String returnValue;
+
+    CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+    std::string u8;
+    fromUstr(u16 ,u8);
+    
+    time_t ms = ms_to_iso8601_to_ms(u8);
+
+    ustr = PA_GetStringParameter(params, 1);
+    u16 = CUTF16String((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+    fromUstr(u16 ,u8);
+    
+    ulid::ULID ulid = ulid::Unmarshal(u8);
+    ulid::EncodeTime(ms, ulid);
     
     std::string str = ulid::Marshal(ulid);
     toUstr(str, returnValue);

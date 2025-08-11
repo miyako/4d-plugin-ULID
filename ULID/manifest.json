@@ -16,7 +16,16 @@
             "theme": "ULID",
             "syntax": "Generate ULID(&T):T",
             "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID Get timestamp(&T):T",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID Set timestamp(&T;&T):T",
+            "threadSafe": true
         }
-        
     ]
 }
