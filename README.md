@@ -24,3 +24,17 @@ ASSERT(Length($ULID)=26)
 $UUID:=ULID to UUID($ULID)
 ASSERT(Length($UUID)=32)
 ```
+
+## timestamp
+
+```4d
+$ULID:=Generate ULID()
+$timestamp0:=ULID Get timestamp($ULID)
+$timestamp1:=Timestamp
+ASSERT($timestamp1>=$timestamp0)
+
+$timestamp1:="1970-01-01T00:00:00.001Z"
+$ULID:=ULID Set timestamp($ULID; $timestamp1)
+$timestamp2:=ULID Get timestamp($ULID)
+ASSERT($timestamp1=$timestamp2)
+```
