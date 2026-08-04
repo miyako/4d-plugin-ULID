@@ -14,6 +14,9 @@
 
 static std::random_device rd;
 static std::mt19937 generator(rd());
+static std::mutex generator_mutex; // guards `generator`: std::mt19937::operator() is not
+                                    // safe to call concurrently from multiple threads,
+                                    // and 4D may dispatch plugin commands preemptively.
 
 void PluginMain(PA_long32 selector, PA_PluginParameters params) {
     
@@ -60,7 +63,11 @@ static void fromUstr(CUTF16String& u16, std::string& u8) {
     if(len){
         std::vector<uint8_t> buf(len + 1);
         if(WideCharToMultiByte(CP_UTF8, 0, (LPCWSTR)u16.c_str(), u16.length(), (LPSTR)&buf[0], len, NULL, NULL)){
-            u8 = std::string((const char *)&buf[0]);
+            // Explicit-length constructor: relying on the null-terminated
+            // constructor here would silently truncate at the first embedded
+            // NUL byte, which the accidental zero-init of buf's extra slot
+            // masked for ordinary text but not for input containing one.
+            u8 = std::string((const char *)&buf[0], (size_t)len);
         }
     }else{
             u8 = std::string((const char *)"");
@@ -88,7 +95,8 @@ static void toUstr(std::string& u8, CUTF16String& u16) {
     if(len){
         std::vector<uint8_t> buf((len + 1) * sizeof(PA_Unichar));
         if(MultiByteToWideChar(CP_UTF8, 0, (LPCSTR)u8.c_str(), u8.length(), (LPWSTR)&buf[0], len)){
-            u16 = CUTF16String((const PA_Unichar *)&buf[0]);
+            // Explicit-length constructor -- see note in fromUstr above.
+            u16 = CUTF16String((const PA_Unichar *)&buf[0], (size_t)len);
         }
     }else{
         u16 = CUTF16String((const PA_Unichar *)L"");
@@ -140,62 +148,125 @@ static std::array<uint8_t, 16> hexToBytes(const std::string &hex) {
     return bytes;
 }
 
+static const char *CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
+
+static int decode_crockford_char(char c) {
+    const char *p = strchr(CROCKFORD_ALPHABET, c);
+    return p ? (int)(p - CROCKFORD_ALPHABET) : -1;
+}
+
+// --- Input validation --------------------------------------------------
+// The vendored ulid library's Unmarshal()/UnmarshalFrom() (ulid_struct.hh /
+// ulid_uint128.hh) do NOT validate length or character range: they index a
+// 26-character buffer and a 256-entry decode table unconditionally. Any 4D
+// method can call "ULID to UUID", "ULID Get timestamp", or "ULID Set timestamp"
+// with an arbitrary string, so this plugin must reject bad input itself
+// before calling into the library -- the library will not do it for us.
+
+static bool isValidHex32(const std::string &hex) {
+    if (hex.size() != 32) return false;
+    for (unsigned char c : hex) {
+        bool isHexDigit = (c >= '0' && c <= '9') ||
+                           (c >= 'a' && c <= 'f') ||
+                           (c >= 'A' && c <= 'F');
+        if (!isHexDigit) return false;
+    }
+    return true;
+}
+
+static bool isValidULIDString(const std::string &str) {
+    if (str.size() != 26) return false;
+    for (unsigned char c : str) {
+        // Reject anything outside 7-bit ASCII before it ever reaches the
+        // library's dec[256] lookup table: on a signed-char platform, a byte
+        // >= 0x80 becomes a NEGATIVE index into that table when the library
+        // does dec[int(str[i])] -- an out-of-bounds read, not just "invalid
+        // input". Checking here avoids ever handing such a byte to the library.
+        if (c > 0x7F) return false;
+        if (decode_crockford_char((char)c) < 0) return false;
+    }
+    return true;
+}
+
 static void ULID_from_UUID(PA_PluginParameters params) {
 
-    PA_Unistring *ustr = PA_GetStringParameter(params, 1);
-    CUTF16String returnValue;
+    CUTF16String returnValue; // stays empty if input is invalid or an exception occurs
 
-    CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
-    std::string u8;
-    fromUstr(u16 ,u8);
-    
-    std::array<uint8_t, 16> bytes = hexToBytes(u8);
-    std::vector<uint8_t> vec(bytes.begin(), bytes.end());
-    
-    std::string str = ulid::Marshal(ulid::UnmarshalBinary(vec));
-    toUstr(str, returnValue);
-    
+    try {
+        PA_Unistring *ustr = PA_GetStringParameter(params, 1);
+        CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+        std::string u8;
+        fromUstr(u16 ,u8);
+
+        if (isValidHex32(u8)) {
+            std::array<uint8_t, 16> bytes = hexToBytes(u8);
+            std::vector<uint8_t> vec(bytes.begin(), bytes.end());
+
+            std::string str = ulid::Marshal(ulid::UnmarshalBinary(vec));
+            toUstr(str, returnValue);
+        }
+        // else: not a 32-hex-char UUID -- return empty string rather than
+        // silently marshaling the ULID for 16 zero bytes.
+    }
+    catch (...) {
+        // Fall through with an empty returnValue -- see note at top of file:
+        // every handler must still call PA_Return* on every path, or a host
+        // that expects a return value can hang waiting for one that never comes.
+    }
+
     PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
 }
 
 static void ULID_to_UUID(PA_PluginParameters params) {
-    
-    PA_Unistring *ustr = PA_GetStringParameter(params, 1);
-    CUTF16String returnValue;
 
-    CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
-    std::string u8;
-    fromUstr(u16 ,u8);
-    
-    ulid::ULID ulid = ulid::Unmarshal(u8);
-    
-    std::vector<uint8_t> bytes = ulid::MarshalBinary(ulid);
-    std::string str = bytesToHex(bytes);
-    
-    toUstr(str, returnValue);
-    
+    CUTF16String returnValue; // stays empty if input is invalid or an exception occurs
+
+    try {
+        PA_Unistring *ustr = PA_GetStringParameter(params, 1);
+        CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+        std::string u8;
+        fromUstr(u16 ,u8);
+
+        if (isValidULIDString(u8)) {
+            ulid::ULID ulid = ulid::Unmarshal(u8);
+
+            std::vector<uint8_t> bytes = ulid::MarshalBinary(ulid);
+            std::string str = bytesToHex(bytes);
+
+            toUstr(str, returnValue);
+        }
+        // else: not a well-formed 26-char ULID string -- return empty string.
+        // (ulid::Unmarshal performs no length/range checking itself and will
+        // read out of bounds on anything shorter than 26 chars, so this check
+        // must happen here, before the call.)
+    }
+    catch (...) {
+        // See note in ULID_from_UUID above.
+    }
+
     PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
 }
 
 static void Generate_ULID(PA_PluginParameters params) {
 
     CUTF16String returnValue;
-    
-    ulid::ULID ulid;
-    ulid::EncodeTimeSystemClockNow(ulid);
-    ulid::EncodeEntropyMt19937(generator, ulid);
-    
-    std::string str = ulid::Marshal(ulid);
-    toUstr(str, returnValue);
-    
+
+    try {
+        ulid::ULID ulid;
+        ulid::EncodeTimeSystemClockNow(ulid);
+        {
+            std::lock_guard<std::mutex> lock(generator_mutex);
+            ulid::EncodeEntropyMt19937(generator, ulid);
+        }
+
+        std::string str = ulid::Marshal(ulid);
+        toUstr(str, returnValue);
+    }
+    catch (...) {
+        // See note in ULID_from_UUID above.
+    }
+
     PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
-}
-
-static const char *CROCKFORD_ALPHABET = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
-
-static int decode_crockford_char(char c) {
-    const char *p = strchr(CROCKFORD_ALPHABET, c);
-    return p ? (int)(p - CROCKFORD_ALPHABET) : -1;
 }
 
 /*
@@ -226,12 +297,17 @@ static std::string ms_to_iso8601(uint64_t ms) {
     time_t t = (time_t)(ms / 1000);
     long msec = (long)(ms % 1000);
 
-    struct tm tm_utc;
+    struct tm tm_utc = {};
 
 #if defined(_WIN32)
-    gmtime_s(&tm_utc, &t);
+    // gmtime_s returns 0 on success, non-zero (errno_t) on failure -- e.g. if
+    // `t` is out of the range this platform can represent as a broken-down time.
+    if (gmtime_s(&tm_utc, &t) != 0) return "";
 #else
-    gmtime_r(&t, &tm_utc);
+    // gmtime_r returns NULL on failure and does not guarantee tm_utc is left
+    // in a defined state -- using tm_utc afterwards on failure would be
+    // undefined behavior, so bail out immediately instead.
+    if (gmtime_r(&t, &tm_utc) == nullptr) return "";
 #endif
     
     char tm_str[20];//19+1
@@ -259,7 +335,18 @@ static uint64_t ms_to_iso8601_to_ms(const std::string& iso) {
                 ss.get(); // consume '.'
                 char ms_str[4] = {'0', '0', '0', '\0'};
                 ss.read(ms_str, 3);
-                milliseconds = std::stoi(ms_str);
+                // std::stoi throws std::invalid_argument if ms_str doesn't
+                // start with a digit (e.g. a malformed fractional-seconds
+                // field such as ".abcZ"). A 4D caller controls this text
+                // directly via "ULID Set timestamp", so guard it here rather
+                // than letting the exception propagate to the caller, where
+                // PluginMain's catch-all would swallow it without a return
+                // value ever having been sent back to 4D.
+                try {
+                    milliseconds = std::stoi(ms_str);
+                } catch (...) {
+                    milliseconds = 0;
+                }
             }
         
         // Assume 'Z' at end (UTC)
@@ -279,43 +366,59 @@ static uint64_t ms_to_iso8601_to_ms(const std::string& iso) {
 }
 
 static void ULID_Get_timestamp(PA_PluginParameters params) {
-    
-    PA_Unistring *ustr = PA_GetStringParameter(params, 1);
-    CUTF16String returnValue;
 
-    CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
-    std::string u8;
-    fromUstr(u16 ,u8);
-    
-    ulid::ULID ulid = ulid::Unmarshal(u8);
-    time_t ms = ulid::Time(ulid);//not really time_t
+    CUTF16String returnValue; // stays empty if input is invalid or an exception occurs
 
-    std::string str = ms_to_iso8601(ms);
-    toUstr(str, returnValue);
-    
+    try {
+        PA_Unistring *ustr = PA_GetStringParameter(params, 1);
+        CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+        std::string u8;
+        fromUstr(u16 ,u8);
+
+        if (isValidULIDString(u8)) {
+            ulid::ULID ulid = ulid::Unmarshal(u8);
+            time_t ms = ulid::Time(ulid);//not really time_t; milliseconds since epoch
+
+            std::string str = ms_to_iso8601(ms);
+            toUstr(str, returnValue);
+        }
+        // else: not a well-formed 26-char ULID string -- return empty string.
+    }
+    catch (...) {
+        // See note in ULID_from_UUID above.
+    }
+
     PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
 }
 
 static void ULID_Set_timestamp(PA_PluginParameters params) {
-    
-    PA_Unistring *ustr = PA_GetStringParameter(params, 2);
-    CUTF16String returnValue;
 
-    CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
-    std::string u8;
-    fromUstr(u16 ,u8);
-    
-    time_t ms = ms_to_iso8601_to_ms(u8);
+    CUTF16String returnValue; // stays empty if input is invalid or an exception occurs
 
-    ustr = PA_GetStringParameter(params, 1);
-    u16 = CUTF16String((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
-    fromUstr(u16 ,u8);
-    
-    ulid::ULID ulid = ulid::Unmarshal(u8);
-    ulid::EncodeTime(ms, ulid);
-    
-    std::string str = ulid::Marshal(ulid);
-    toUstr(str, returnValue);
-    
+    try {
+        PA_Unistring *ustr = PA_GetStringParameter(params, 2);
+        CUTF16String u16((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+        std::string u8;
+        fromUstr(u16 ,u8);
+
+        time_t ms = (time_t)ms_to_iso8601_to_ms(u8);
+
+        ustr = PA_GetStringParameter(params, 1);
+        u16 = CUTF16String((const PA_Unichar *)ustr->fString, (PA_long32)ustr->fLength);
+        fromUstr(u16 ,u8);
+
+        if (isValidULIDString(u8)) {
+            ulid::ULID ulid = ulid::Unmarshal(u8);
+            ulid::EncodeTime(ms, ulid);
+
+            std::string str = ulid::Marshal(ulid);
+            toUstr(str, returnValue);
+        }
+        // else: not a well-formed 26-char ULID string -- return empty string.
+    }
+    catch (...) {
+        // See note in ULID_from_UUID above.
+    }
+
     PA_ReturnString(params, (PA_Unichar *)returnValue.c_str());
 }

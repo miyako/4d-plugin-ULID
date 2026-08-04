@@ -28,6 +28,8 @@
 #include <iomanip>
 #include <string>
 #include <cstdint>
+#include <cstring>
+#include <mutex>
 
 #include <time.h>
 
