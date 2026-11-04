@@ -9,6 +9,9 @@
  # --------------------------------------------------------------------------------*/
 
 #include "4DPlugin-ULID.h"
+#include "ulid_core.h"
+
+static void strict_command(PA_long32 selector, PA_PluginParameters params);
 
 #pragma mark -
 
@@ -41,6 +44,13 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
             case 5 :
                 ULID_Set_timestamp(params);
                 break;
+            case 6:
+            case 7:
+            case 8:
+            case 9:
+            case 10:
+                strict_command(selector, params);
+                break;
 
         }
 
@@ -54,6 +64,71 @@ void PluginMain(PA_long32 selector, PA_PluginParameters params) {
 #pragma mark -
 
 typedef std::basic_string<PA_Unichar> CUTF16String;
+
+static std::string ascii_parameter(PA_PluginParameters params, short index) {
+    const auto* input = PA_GetStringParameter(params, index);
+    if (input->fLength != 26)
+        throw std::invalid_argument("ULID must contain exactly 26 ASCII characters");
+    std::string text;
+    text.reserve(input->fLength);
+    for (PA_long32 i = 0; i < input->fLength; ++i) {
+        if (input->fString[i] > 127) throw std::invalid_argument("Input must be ASCII");
+        text.push_back(static_cast<char>(input->fString[i]));
+    }
+    return text;
+}
+
+static void strict_command(PA_long32 selector, PA_PluginParameters params) {
+    static ulid_core::Generator secure_generator;
+    CUTF16String result;
+    ulid_core::Bytes bytes{};
+    double milliseconds = -1;
+    PA_long32 valid = 0;
+    std::string error;
+    try {
+        switch (selector) {
+            case 6:
+                result = CUTF16String();
+                {
+                    const auto text = ulid_core::encode(secure_generator.next());
+                    result.assign(text.begin(), text.end());
+                }
+                break;
+            case 7:
+            case 9:
+            case 10:
+                bytes = ulid_core::decode(ascii_parameter(params, 1));
+                milliseconds = static_cast<double>(ulid_core::timestamp(bytes));
+                valid = 1;
+                break;
+            case 8:
+                if (PA_GetBlobParameter(params, 1, nullptr) != 16)
+                    throw std::invalid_argument("BLOB must contain exactly 16 network-order bytes");
+                if (PA_GetBlobParameter(params, 1, bytes.data()) != 16)
+                    throw std::runtime_error("Could not read BLOB");
+                {
+                    const auto text = ulid_core::encode(bytes);
+                    result.assign(text.begin(), text.end());
+                }
+                break;
+        }
+    } catch (const std::exception& exception) {
+        error = exception.what();
+    } catch (...) {
+        error = "Unexpected native ULID error";
+    }
+    if (selector != 10) {
+        CUTF16String message(error.begin(), error.end());
+        PA_SetUnistring(PA_GetStringParameter(params, selector == 6 ? 1 : 2),
+                        const_cast<PA_Unichar*>(message.c_str()));
+    }
+    switch (selector) {
+        case 7: PA_ReturnBlob(params, bytes.data(), error.empty() ? 16 : 0); break;
+        case 9: PA_ReturnDouble(params, milliseconds); break;
+        case 10: PA_ReturnLong(params, valid); break;
+        default: PA_ReturnString(params, const_cast<PA_Unichar*>(result.c_str())); break;
+    }
+}
 
 static void fromUstr(CUTF16String& u16, std::string& u8) {
     

@@ -5,9 +5,78 @@
 
 # 4d-plugin-ULID
 
-Generates and converts [ULIDs](https://github.com/ulid/spec) (Universally Unique Lexicographically Sortable Identifiers) — 26-character, sortable, timestamp-prefixed identifiers — and converts between ULID text and the 32-character hexadecimal UUID representation 4D can store in a `UUID` field. All five commands work with plain `Text`; there is no dedicated ULID data type in 4D.
+Generates and converts [ULIDs](https://github.com/ulid/spec): 26-character identifiers containing a 48-bit Unix millisecond timestamp and 80-bit suffix. The original five text commands remain unchanged. Five additional commands provide strict validation, OS-secure monotonic generation, exact numeric timestamps, and functional **classic BLOB** conversion.
 
-**Platforms:** macOS and Windows. The plugin uses only long-stable, non-version-gated APIs (basic Unicode text conversion, standard C time functions), so no specific minimum OS version is implied.
+**Build targets:** macOS universal (Intel + Apple Silicon, deployment target 11.5) and Windows x64. No Linux, Windows ARM64 or 32-bit distribution is built. See [release and secret setup](RELEASE.md).
+
+## Install and quickstart
+
+Copy the complete `ULID.bundle` from a reviewed release archive into the application's `Plugins` folder and restart 4D. Do not mix individual executable/resource files from different versions. The committed historical ZIP, DMG and `test/Plugins` bundle are **not** rebuilt by these source changes.
+
+Store canonical ULIDs in an ordinary **indexed Text field**. A ULID is not a UUID, and no compatibility with 4D's UUID field semantics is promised. The legacy commands containing “UUID” in their names are simply raw 128-bit hexadecimal re-encodings.
+
+```4d
+var $id; $back; $error : Text
+var $bytes : Blob  // classic BLOB, NOT a boxed 4D.Blob object
+var $milliseconds : Real
+
+$id:=ULID Generate($error)
+If ($error="")
+    $bytes:=ULID To blob($id; $error)
+    If ($error="")
+        $back:=ULID From blob($bytes; $error)
+    End if
+End if
+If ($error#"")
+    // Handle the error before using any result.
+    ALERT($error)
+End if
+$milliseconds:=ULID Timestamp($id; $error)
+```
+
+### Strict API (new command IDs 6–10)
+
+| Command | Result | Error parameter |
+|---|---|---|
+| `ULID Generate($error)` | Text: secure monotonic ULID | Text output |
+| `ULID To blob($id; $error)` | Classic BLOB: 16 network-order bytes | Text output |
+| `ULID From blob($bytes; $error)` | Text: canonical uppercase ULID | Text output |
+| `ULID Timestamp($id; $error)` | Real: exact Unix milliseconds | Text output |
+| `ULID Is valid($id)` | Longint: 1 valid, 0 invalid | None; a validation predicate |
+
+Pass a writable Text variable for **every** `$error` argument. It is cleared on success and set to a descriptive message on failure. Failed conversions/generation return empty Text/BLOB; failed timestamp extraction returns `-1`, never the valid epoch value `0`. Check `$error` immediately. These commands do not raise a 4D language error; the bundled SDK only exposes the last SDK error, not a plug-in exception-raising API. Explicit per-call output avoids shared last-error state across cooperative/preemptive processes. The legacy silent-input behavior below is retained only for compatibility.
+
+Strict text decoding accepts ASCII uppercase/lowercase, exactly 26 characters, and rejects `I`, `L`, `O`, `U`, embedded NUL, non-ASCII and a first digit greater than `7` (128-bit overflow). Output is always uppercase. Timestamp `281474976710655` is accepted: all 48-bit millisecond integers are exactly representable by a 4D Real/double; **do not use Longint**.
+
+Binary conversion is a functional return, not a BLOB output argument. From-blob requires **exactly 16 bytes**, including leading zeros, ordered most-significant byte first: six timestamp bytes then ten suffix bytes. Every 16-byte sequence has a ULID encoding. The SDK manifest tokens are `ULID To blob(&T;&T):O` and `ULID From blob(&O;&T):T`; `PA_ReturnBlob` supplies the result and the host copies/owns it. The timestamp return token is `:8` for `PA_ReturnDouble`. These are ABI requirements: `X`/`&X` and `:R` do not implement these SDK contracts. See the [4D classic BLOB documentation](https://developer.4d.com/docs/19/Concepts/blob).
+
+### Ordering and randomness
+
+`ULID Generate` uses macOS `getentropy` / Windows `BCryptGenRandom` for ten fresh random bytes when uninitialized or the clock advances. Within the same millisecond or after clock rollback, a mutex-protected **process-wide** generator retains its timestamp and increments the 80-bit suffix. Overflow and OS RNG failure are explicit errors; failed calls do not commit generator state. It does not busy-wait for the clock.
+
+Ordering is allocation order within one running 4D process, **not** response/transaction commit order, cross-host order, or order across restarts. IDs are probabilistically unique, reveal time, and are not secrets or authentication tokens. The strict generator is separate from legacy `Generate ULID`, whose behavior has not been silently changed. Batch/collection commands are not provided.
+
+### Build and verification
+
+```sh
+# On macOS; omit the architecture option for Windows x64.
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release '-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64'
+cmake --build build --config Release
+ctest --test-dir build -C Release --output-on-failure
+# Fresh bundle: build/package/ULID.bundle
+python3 scripts/host_smoke.py --runtime "/path/to/tool4d"
+python3 scripts/host_smoke.py --runtime "/path/to/tool4d" --compiled --report build/host-compiled-report.json
+```
+
+Native tests cover pinned spec vectors, strict decoding, exact bytes, injected clock/RNG failure, rollback, overflow, concurrency and mock SDK dispatch. The mock tests alone are **not** 4D runtime acceptance. The host runner isolates the project and freshly built plug-in, rejects missing/false reports, and in compiled mode requires `Compile project` success with no diagnostics and `compiled: true` in the runtime report.
+
+Locally exercised: macOS 26.7, Xcode 26.6 universal CMake and existing Xcode project builds, arm64 tool4d 21.1 (`21.100468`). Initial source and compiled runs exited zero with all reported checks true and no compile diagnostics: 100 repeated classic-BLOB roundtrips, network-order bytes, invalid inputs/errors, timestamp precision and legacy conversion. **Repeatable host acceptance is currently blocked:** later runs produced `xbox 1150` and a shutdown SIGSEGV, also reproduced in a minimal project with **no Plugins directory**. This control narrows the failure but does not establish its root cause. The runner still rejects nonzero exits even if a success report was written.
+
+Reproduce the no-plug-in control with `python3 scripts/host_smoke.py --runtime "/path/to/tool4d" --baseline --report build/baseline-report.json`. Failure diagnostics, command and exit code are retained beside the report under a unique `host-failure-*` directory. Stale reports are removed before each run. Intel runtime execution, Windows builds/runtime, minimum macOS 11.5 runtime, and 4D preemptive-process execution are not established by the local run. The native generator is synchronized and the manifest permits preemptive calls; that declaration is not a preemptive-host test.
+
+Vendored source/SDK files remain in-tree, without dependency updates or generated binaries. Immutable reference revisions and licenses are in [THIRD_PARTY.md](THIRD_PARTY.md).
+
+## Legacy text API (command IDs 1–5)
 
 | Command | Returns | Purpose |
 |---|---|---|
@@ -21,11 +90,11 @@ Generates and converts [ULIDs](https://github.com/ulid/spec) (Universally Unique
 
 ## Requirements & platform notes
 
-- All parameters are **mandatory Text parameters** — none of the five commands has an optional form.
-- A **ULID string must be exactly 26 characters** of valid [Crockford Base32](https://www.crockford.com/base32.html) (digits `0`-`9` and uppercase letters, excluding `I`, `L`, `O`, `U`). A **UUID string must be exactly 32 hexadecimal characters**, no dashes — this is the same 32-character form you'd store in a 4D `UUID` field after stripping its separators.
+- Legacy parameters are Text. The existing manifest declares an ignored Text argument for `Generate ULID`; use `Generate ULID("")` for diagnostic-free compilation. Calls omitting it continue to work interpreted.
+- Legacy ULID input must be exactly 26 uppercase Crockford Base32 characters. Legacy validation does not reject leading-digit overflow; use the strict API for untrusted input. The legacy “UUID” input is exactly 32 hexadecimal characters, no dashes.
 - **Any command given malformed ULID/UUID text (wrong length, or a character outside the valid alphabet) returns an empty string.** This is the behavior of the fixed source delivered alongside this doc — earlier builds validated less of this input and could behave unpredictably on malformed text. If you're documenting or relying on this against an already-built binary, confirm which version you have.
 - `ULID Get timestamp` reads the ULID's timestamp field, which is a 48-bit millisecond count from the Unix epoch (1970-01-01). It cannot represent a date before 1970 or past roughly the year 10889; out-of-range timestamps return an empty string.
-- `Generate ULID`'s random entropy comes from a single `std::mt19937` generator shared for the plugin's lifetime — good for uniqueness and lexicographic sort order, not intended as a source of cryptographically unpredictable values.
+- `Generate ULID`'s entropy comes from a single shared `std::mt19937` generator. It is not cryptographically unpredictable or monotonic.
 
 ---
 
@@ -34,7 +103,7 @@ Generates and converts [ULIDs](https://github.com/ulid/spec) (Universally Unique
 ### Syntax
 
 ```4d
-Generate ULID() → Text
+Generate ULID(ignoredText) → Text
 ```
 
 | Parameter | Type | Description |
@@ -43,24 +112,24 @@ Generate ULID() → Text
 
 ### Description
 
-Builds a new ULID from the current system time (millisecond precision, UTC) and 80 bits of random entropy. Calling it repeatedly produces lexicographically increasing values as long as system time moves forward, which is the point of the ULID format — you get sortable, roughly-time-ordered unique IDs without a database round-trip.
+Builds a ULID from system time and non-cryptographic `mt19937` entropy. Same-millisecond calls are not sorted; clock rollback can move timestamps backward. Use `ULID Generate` for monotonic semantics.
 
 ### Example
 
 From the plugin's own test method (`test.4dm`):
 ```4d
-$ULID:=Generate ULID()
+$ULID:=Generate ULID("")
 ASSERT:C1129(Length:C16($ULID)=26)
 ```
 
-Generating several IDs in a loop and confirming they sort in creation order:
+Generating several IDs (sort explicitly if needed):
 ```4d
 ARRAY TEXT:C222($ids;10)
 For:C155($i;1;10)
-	$ids{$i}:=Generate ULID()
+	$ids{$i}:=Generate ULID("")
 End for:C155
 
-// $ids is already lexicographically sorted by creation time
+// Same-millisecond legacy IDs are not necessarily sorted.
 ```
 
 ---
@@ -80,7 +149,7 @@ ULID from UUID(UUID) → Text
 
 ### Description
 
-Converts the 32-character hex form of a UUID (as stored in a 4D `UUID` field, with separators stripped) into the equivalent ULID text. This is a pure re-encoding of the same 128 bits — no timestamp reinterpretation happens, since a plain UUID has no defined timestamp field the way a ULID does.
+Re-encodes 32 hexadecimal characters as ULID text. This does not establish UUID version/variant or 4D UUID-field compatibility.
 
 ### Example
 
@@ -91,9 +160,9 @@ $ULID:=ULID from UUID("0000587cea2c04040404040404040404")
 //you can exchange this representation with other applications
 ```
 
-Round-tripping a UUID field value through ULID text for an external API that expects ULIDs:
+Re-encoding an existing hexadecimal identifier:
 ```4d
-$UUIDField:=UUID:C1487  // or a UUID value read from a table
+$UUIDField:=UUID:C1487
 $ULIDText:=ULID from UUID($UUIDField)
 If:C25($ULIDText#"")
 	// send $ULIDText to the external system
@@ -117,7 +186,7 @@ ULID to UUID(ULID) → Text
 
 ### Description
 
-The inverse of [`ULID from UUID`](#ulid-from-uuid): re-encodes a ULID's 128 bits as a 32-character hex string with no dashes, suitable for storing in a 4D `UUID` field.
+The inverse of [`ULID from UUID`](#ulid-from-uuid): re-encodes the bits as 32 lowercase hexadecimal characters without UUID semantic guarantees.
 
 ### Example
 
@@ -125,12 +194,12 @@ From the plugin's own test method (`test.4dm`):
 ```4d
 $UUID:=ULID to UUID("0001C7STHC0G2081040G208104")
 //0000587cea2c04040404040404040404
-//you can store this representation in a UUID field
+//raw hexadecimal representation
 ```
 
 Converting a freshly generated ULID and confirming the expected length:
 ```4d
-$ULID:=Generate ULID()
+$ULID:=Generate ULID("")
 ASSERT:C1129(Length:C16($ULID)=26)
 $UUID:=ULID to UUID($ULID)
 ASSERT:C1129(Length:C16($UUID)=32)
@@ -159,7 +228,7 @@ Reads the first 48 bits of the ULID — its timestamp field — and formats it a
 
 From the plugin's own test method (`test.4dm`), comparing a freshly generated ULID's timestamp against the current time:
 ```4d
-$ULID:=Generate ULID()
+$ULID:=Generate ULID("")
 $timestamp0:=ULID Get timestamp($ULID)
 $timestamp1:=Timestamp:C1445
 ASSERT:C1129($timestamp1>=$timestamp0)
@@ -208,7 +277,7 @@ Backdating a batch of ULIDs to a fixed timestamp while keeping each one's own ra
 ```4d
 ARRAY TEXT:C222($ids;5)
 For:C155($i;1;5)
-	$ids{$i}:=ULID Set timestamp(Generate ULID(); "2020-01-01T00:00:00.000Z")
+	$ids{$i}:=ULID Set timestamp(Generate ULID(""); "2020-01-01T00:00:00.000Z")
 End for:C155
 ```
 
@@ -228,7 +297,7 @@ End for:C155
 ## Quick reference
 
 ```4d
-$ULID:=Generate ULID()
+$ULID:=Generate ULID("")
 $UUID:=ULID to UUID($ULID)
 $ULIDBack:=ULID from UUID($UUID)  // == $ULID
 
