@@ -50,6 +50,7 @@ jobs:
   sign-and-release:
     needs: [preflight, build]
     runs-on: macos-15
+    timeout-minutes: 50
     environment: release
     permissions:
       contents: write
@@ -73,6 +74,7 @@ jobs:
           python scripts/release/artifacts.py unpack downloads/native-windows/native.tar inputs/windows
           python scripts/release/artifacts.py assemble --inputs inputs --bundle package/ULID.bundle --sha "$SOURCE_SHA"
       - name: Developer ID sign, notarize and validate final distributions
+        timeout-minutes: 40
         env:
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
@@ -104,7 +106,9 @@ jobs:
       - name: Remove signing credentials
         if: always()
         run: |
+          status=0
           if [ -f release-state/build.keychain-db ]; then
-            security delete-keychain "$PWD/release-state/build.keychain-db"
+            python3 scripts/release/bounded.py --label "Remove remaining signing keychain" --timeout 120 -- security delete-keychain "$PWD/release-state/build.keychain-db" || status=$?
           fi
-          rm -f release-state/certificate.p12
+          rm -f release-state/certificate.p12 || status=$?
+          exit "$status"
