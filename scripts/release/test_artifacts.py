@@ -257,14 +257,19 @@ class ArtifactTests(unittest.TestCase):
         env = {key: "configured" for key in preflight.SECRETS}
         env.update(RELEASE_TAG="v1.2.3", PUBLICATION="create-draft", NOTARYTOOL_TEAM_ID="ABC1234567")
         info = {"CFBundleShortVersionString": "1.2.3"}
-        self.assertEqual(preflight.validate(env, info), "v1.2.3")
-        for key in preflight.SECRETS:
-            with self.assertRaisesRegex(ValueError, "Missing"):
-                preflight.validate({**env, key: ""}, info)
-        for change in ({"PUBLICATION": "none"}, {"RELEASE_TAG": "v1.2.4"},
-                       {"RELEASE_TAG": "v1.2.3;exit"}, {"NOTARYTOOL_TEAM_ID": "wrong"}):
-            with self.assertRaises(ValueError):
-                preflight.validate({**env, **change}, info)
+        for mode in ("create-draft", "publish"):
+            env["PUBLICATION"] = mode
+            self.assertEqual(preflight.validate(env, info), "v1.2.3")
+            for key in preflight.SECRETS:
+                with self.assertRaisesRegex(ValueError, "Missing"):
+                    preflight.validate({**env, key: ""}, info)
+            for change in ({"RELEASE_TAG": "v1.2.4"}, {"RELEASE_TAG": "v1.2.3;exit"},
+                           {"NOTARYTOOL_TEAM_ID": "wrong"}):
+                with self.assertRaises(ValueError):
+                    preflight.validate({**env, **change}, info)
+        for mode in ("none", "", "invalid", None):
+            with self.assertRaisesRegex(ValueError, "authorization"):
+                preflight.validate({**env, "PUBLICATION": mode}, info)
 
     def test_real_source_manifest_ids_and_abi_contract(self):
         source = Path(__file__).resolve().parents[2] / "manifest.json"
