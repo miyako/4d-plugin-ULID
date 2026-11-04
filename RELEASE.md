@@ -49,9 +49,26 @@ The project, SDK and suyash license files are required resources and are exporte
 from the same immutable repository snapshot. See `THIRD_PARTY.md` for upstream
 provenance and its explicitly documented SDK-baseline limitation.
 The actual source and packaged manifest are checked against all ten ordered
-command IDs, preserving the original five signatures and requiring classic BLOB
+command IDs, retaining the original argument/result types and requiring classic BLOB
 `&O`/`:O` and the `PA_ReturnDouble` result token `:8`. A fixture-only check is
 not sufficient: the Python suite also reads the repository's real manifest.
+Only ID 3 is renamed, from `Generate ULID(&T):T` to
+`_o_Generate ULID(&T):T`, to mark nonsecure/nonmonotonic generation obsolete.
+Its implementation is unchanged; recommend `ULID Generate($error)` for new code.
+IDs 1, 2, 4 and 5 keep their distinct conversion/timestamp names and are not
+marked obsolete; IDs 6-10 are unchanged. Keep plug-in ID `20000` and every
+ordinal fixed so explicit `:P20000:3` token references retain selector identity.
+Plain textual old-name calls may need migration to `_o_Generate ULID("")`;
+there is no old-name alias or universal source-compatibility guarantee.
+The host fixture exercises both the renamed plain command and an old-name
+explicit token in source and compiled modes when the host can complete.
+Prior user-reported desktop acceptance applies to the prior tested binary,
+not automatically to this renamed artifact. The renamed bundle has independently
+passed source and compiled smoke on arm64 tool4d 21.1 (`21.100468`), with clean
+compilation and zero process exits for both runs. The new plain name and old-name
+explicit token both resolved; untokenized `Generate ULID("")` failed a separate
+negative compile check on that host. The earlier documented tool4d shutdown
+baseline failure remains unexplained; the successful runs do not prove it fixed.
 Native manifests are explicitly **pre-signing provenance**, not signed-byte hashes.
 This establishes source-pinned provenance, not byte-for-byte reproducible builds
 across different compiler/SDK versions.

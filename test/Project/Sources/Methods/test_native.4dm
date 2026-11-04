@@ -5,9 +5,14 @@ var $report; $checks : Object
 var $ok : Boolean
 var $i : Integer
 var $milliseconds : Real
+var $obsolete; $tokenized : Text
 
 $ok:=True
 $checks:=New object
+$obsolete:=_o_Generate ULID("")
+$checks.obsoleteGenerator:=(Length($obsolete)=26) & (ULID Is valid($obsolete)=1)
+$tokenized:=Generate ULID:P20000:3("")
+$checks.oldNameToken:=(Length($tokenized)=26) & (ULID Is valid($tokenized)=1)
 $id:=ULID Generate($error)
 $checks.generate:=($error="") & (Length($id)=26)
 $previous:=$id
@@ -47,7 +52,7 @@ $bytes:=ULID To blob("invalid"; $error)
 $checks.invalidText:=(BLOB size($bytes)=0) & ($error#"")
 $checks.maximum:=(ULID Timestamp("7ZZZZZZZZZZZZZZZZZZZZZZZZZ"; $error)=281474976710655) & ($error="")
 $checks.legacy:=(ULID from UUID("0000587cea2c04040404040404040404")="0001C7STHC0G2081040G208104")
-$ok:=$checks.generate & $checks.monotonic & $checks.blobSize & $checks.networkOrder & $checks.roundtrip & $checks.repeated & $checks.lowercase & $checks.overflow & $checks.timestamp & $checks.invalidBlob & $checks.longBlob & $checks.emptyBlob & $checks.invalidText & $checks.maximum & $checks.legacy
+$ok:=$checks.obsoleteGenerator & $checks.oldNameToken & $checks.generate & $checks.monotonic & $checks.blobSize & $checks.networkOrder & $checks.roundtrip & $checks.repeated & $checks.lowercase & $checks.overflow & $checks.timestamp & $checks.invalidBlob & $checks.longBlob & $checks.emptyBlob & $checks.invalidText & $checks.maximum & $checks.legacy
 $report:=New object("success"; $ok; "checks"; $checks; "milliseconds"; $milliseconds; "runtime"; Application version; "compiled"; Is compiled mode)
 File(Folder(fk database folder).path+"ulid-smoke.json").setText(JSON Stringify($report))
 QUIT 4D

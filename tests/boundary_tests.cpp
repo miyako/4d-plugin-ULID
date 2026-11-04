@@ -120,6 +120,15 @@ int main() {
         const auto first = generation.result;
         PluginMain(6, &generation.block);
         check(first < generation.result);
+        Host obsolete_generation;
+        obsolete_generation.input(0, "");
+        PluginMain(3, &obsolete_generation.block);
+        check(obsolete_generation.returns == 1 && obsolete_generation.result.size() == 26);
+        check(ulid_core::encode(ulid_core::decode(ascii(obsolete_generation.result))) ==
+              ascii(obsolete_generation.result));
+        obsolete_generation.input(0, "still ignored");
+        PluginMain(3, &obsolete_generation.block);
+        check(obsolete_generation.returns == 2 && obsolete_generation.result.size() == 26);
         Host legacy;
         legacy.input(0, "0000587cea2c04040404040404040404");
         PluginMain(1, &legacy.block);

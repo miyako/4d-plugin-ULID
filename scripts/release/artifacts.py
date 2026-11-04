@@ -21,7 +21,7 @@ BINARIES = {"macos": "Contents/MacOS/ULID",
 COMMAND_SYNTAX = (
     "ULID from UUID(&T):T",
     "ULID to UUID(&T):T",
-    "Generate ULID(&T):T",
+    "_o_Generate ULID(&T):T",
     "ULID Get timestamp(&T):T",
     "ULID Set timestamp(&T;&T):T",
     "ULID Generate(&T):T",

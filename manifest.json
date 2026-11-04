@@ -14,7 +14,7 @@
         },
         {
             "theme": "ULID",
-            "syntax": "Generate ULID(&T):T",
+            "syntax": "_o_Generate ULID(&T):T",
             "threadSafe": true
         },
         {

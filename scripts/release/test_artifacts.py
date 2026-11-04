@@ -271,6 +271,11 @@ class ArtifactTests(unittest.TestCase):
         data = json.loads(source.read_bytes())
         artifacts.validate_manifest(data)
         self.assertEqual(len(data["commands"]), 10)
+        self.assertEqual(data["commands"][2]["syntax"], "_o_Generate ULID(&T):T")
+        self.assertEqual([command["syntax"] for command in data["commands"][:5]], [
+            "ULID from UUID(&T):T", "ULID to UUID(&T):T", "_o_Generate ULID(&T):T",
+            "ULID Get timestamp(&T):T", "ULID Set timestamp(&T;&T):T",
+        ])
         self.assertEqual(data["commands"][6]["syntax"], "ULID To blob(&T;&T):O")
         self.assertEqual(data["commands"][7]["syntax"], "ULID From blob(&O;&T):T")
         self.assertEqual(data["commands"][8]["syntax"], "ULID Timestamp(&T;&T):8")
@@ -278,6 +283,7 @@ class ArtifactTests(unittest.TestCase):
     def test_manifest_contract_rejects_reordering_missing_and_wrong_abi(self):
         for index, wrong in (
             (0, "ULID to UUID(&T):T"),
+            (2, "Generate ULID(&T):T"),
             (6, "ULID To blob(&T;&T):X"),
             (7, "ULID From blob(&X;&T):T"),
             (8, "ULID Timestamp(&T;&T):R"),

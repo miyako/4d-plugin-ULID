@@ -5,7 +5,7 @@
 
 # 4d-plugin-ULID
 
-Generates and converts [ULIDs](https://github.com/ulid/spec): 26-character identifiers containing a 48-bit Unix millisecond timestamp and 80-bit suffix. The original five text commands remain unchanged. Five additional commands provide strict validation, OS-secure monotonic generation, exact numeric timestamps, and functional **classic BLOB** conversion.
+Generates and converts [ULIDs](https://github.com/ulid/spec): 26-character identifiers containing a 48-bit Unix millisecond timestamp and 80-bit suffix. The original five command IDs and implementations are retained; only the legacy generator's public name is now `_o_Generate ULID` to mark it obsolete. Five additional commands provide strict validation, OS-secure monotonic generation, exact numeric timestamps, and functional **classic BLOB** conversion.
 
 **Build targets:** macOS universal (Intel + Apple Silicon, deployment target 11.5) and Windows x64. No Linux, Windows ARM64 or 32-bit distribution is built. See [release and secret setup](RELEASE.md).
 
@@ -54,7 +54,7 @@ Binary conversion is a functional return, not a BLOB output argument. From-blob 
 
 `ULID Generate` uses macOS `getentropy` / Windows `BCryptGenRandom` for ten fresh random bytes when uninitialized or the clock advances. Within the same millisecond or after clock rollback, a mutex-protected **process-wide** generator retains its timestamp and increments the 80-bit suffix. Overflow and OS RNG failure are explicit errors; failed calls do not commit generator state. It does not busy-wait for the clock.
 
-Ordering is allocation order within one running 4D process, **not** response/transaction commit order, cross-host order, or order across restarts. IDs are probabilistically unique, reveal time, and are not secrets or authentication tokens. The strict generator is separate from legacy `Generate ULID`, whose behavior has not been silently changed. Batch/collection commands are not provided.
+Ordering is allocation order within one running 4D process, **not** response/transaction commit order, cross-host order, or order across restarts. IDs are probabilistically unique, reveal time, and are not secrets or authentication tokens. The strict generator is separate from obsolete `_o_Generate ULID`, whose implementation and behavior are retained. Batch/collection commands are not provided.
 
 ### Build and verification
 
@@ -70,7 +70,9 @@ python3 scripts/host_smoke.py --runtime "/path/to/tool4d" --compiled --report bu
 
 Native tests cover pinned spec vectors, strict decoding, exact bytes, injected clock/RNG failure, rollback, overflow, concurrency and mock SDK dispatch. The mock tests alone are **not** 4D runtime acceptance. The host runner isolates the project and freshly built plug-in, rejects missing/false reports, and in compiled mode requires `Compile project` success with no diagnostics and `compiled: true` in the runtime report.
 
-Locally exercised: macOS 26.7, Xcode 26.6 universal CMake and existing Xcode project builds, arm64 tool4d 21.1 (`21.100468`). Initial source and compiled runs exited zero with all reported checks true and no compile diagnostics: 100 repeated classic-BLOB roundtrips, network-order bytes, invalid inputs/errors, timestamp precision and legacy conversion. **Repeatable host acceptance is currently blocked:** later runs produced `xbox 1150` and a shutdown SIGSEGV, also reproduced in a minimal project with **no Plugins directory**. This control narrows the failure but does not establish its root cause. The runner still rejects nonzero exits even if a success report was written.
+Locally exercised: macOS 26.7, Xcode 26.6 universal CMake and existing Xcode project builds, arm64 tool4d 21.1 (`21.100468`). Initial source and compiled runs exited zero with all reported checks true and no compile diagnostics: 100 repeated classic-BLOB roundtrips, network-order bytes, invalid inputs/errors, timestamp precision and legacy conversion. The renamed build also passed source and compiled smoke runs with zero process exits, no compile diagnostics, and both `obsoleteGenerator` and `oldNameToken` checks true.
+
+**Known host repeatability limitation:** earlier subsequent runs produced `xbox 1150` and a shutdown SIGSEGV, also reproduced in a minimal project with **no Plugins directory**. The later successful renamed-build runs do not diagnose or prove resolution of that shutdown issue. The runner still rejects nonzero exits even if a success report was written.
 
 Reproduce the no-plug-in control with `python3 scripts/host_smoke.py --runtime "/path/to/tool4d" --baseline --report build/baseline-report.json`. Failure diagnostics, command and exit code are retained beside the report under a unique `host-failure-*` directory. Stale reports are removed before each run. Intel runtime execution, Windows builds/runtime, minimum macOS 11.5 runtime, and 4D preemptive-process execution are not established by the local run. The native generator is synchronized and the manifest permits preemptive calls; that declaration is not a preemptive-host test.
 
@@ -78,9 +80,38 @@ Vendored source/SDK files remain in-tree, without dependency updates or generate
 
 ## Legacy text API (command IDs 1–5)
 
+### Generator rename and compatibility
+
+Only the old generator is marked obsolete: `Generate ULID` is now
+`_o_Generate ULID`, still command **ID 3** with the same ignored Text argument,
+Text result, implementation and behavior. `_o_` identifies its nonsecure,
+nonmonotonic generation as obsolete; use **`ULID Generate($error)`** for new
+code and handle its error output. The distinct `ULID from UUID`, `ULID to UUID`,
+`ULID Get timestamp` and `ULID Set timestamp` commands are **not** marked
+obsolete or renamed.
+
+The plug-in ID remains `20000` and all command ordinals remain unchanged.
+[4D token references](https://doc.4d.com/4Dv20/4D/20.6/Using-tokens-in-formulas.300-7487422.en.html)
+identify plug-in commands by `:P<pluginID>:<commandIndex>`; retaining
+`:P20000:3` preserves selector resolution for those references, including an
+old-spelling explicit token such as `Generate ULID:P20000:3("")`.
+This is **not universal textual-source compatibility**: plain untokenized
+`Generate ULID("")` calls, pasted/exported source and dynamic formula strings
+may require the new `_o_Generate ULID("")` spelling or an explicit token.
+No old-name alias is registered. Recompile and test existing projects with the
+new bundle; do not infer acceptance of this renamed build from tests of an older
+binary.
+
+On the tested 4D 21.1 host, the renamed plain command and old-spelling explicit
+token above passed both interpreted and compiled smoke execution. A separate
+negative `Compile project` check of untokenized `Generate ULID("")` failed
+with “The variable Generate ULID is not a method.” That plain source must be
+updated on this host; other host versions and existing project formats still
+require migration testing.
+
 | Command | Returns | Purpose |
 |---|---|---|
-| [`Generate ULID`](#generate-ulid) | Text | Create a new ULID from the current time and random entropy |
+| [`_o_Generate ULID`](#obsolete-generator) | Text | Obsolete nonsecure, nonmonotonic generation; prefer `ULID Generate($error)` |
 | [`ULID from UUID`](#ulid-from-uuid) | Text | Convert a 32-character hex UUID to its ULID text form |
 | [`ULID to UUID`](#ulid-to-uuid) | Text | Convert a ULID back to its 32-character hex UUID form |
 | [`ULID Get timestamp`](#ulid-get-timestamp) | Text | Read the timestamp encoded in a ULID, as ISO 8601 UTC |
@@ -90,20 +121,20 @@ Vendored source/SDK files remain in-tree, without dependency updates or generate
 
 ## Requirements & platform notes
 
-- Legacy parameters are Text. The existing manifest declares an ignored Text argument for `Generate ULID`; use `Generate ULID("")` for diagnostic-free compilation. Calls omitting it continue to work interpreted.
+- Legacy parameters are Text. The manifest retains an ignored Text argument for `_o_Generate ULID`; use `_o_Generate ULID("")` for diagnostic-free compilation. Calls omitting it continue to work interpreted.
 - Legacy ULID input must be exactly 26 uppercase Crockford Base32 characters. Legacy validation does not reject leading-digit overflow; use the strict API for untrusted input. The legacy “UUID” input is exactly 32 hexadecimal characters, no dashes.
 - **Any command given malformed ULID/UUID text (wrong length, or a character outside the valid alphabet) returns an empty string.** This is the behavior of the fixed source delivered alongside this doc — earlier builds validated less of this input and could behave unpredictably on malformed text. If you're documenting or relying on this against an already-built binary, confirm which version you have.
 - `ULID Get timestamp` reads the ULID's timestamp field, which is a 48-bit millisecond count from the Unix epoch (1970-01-01). It cannot represent a date before 1970 or past roughly the year 10889; out-of-range timestamps return an empty string.
-- `Generate ULID`'s entropy comes from a single shared `std::mt19937` generator. It is not cryptographically unpredictable or monotonic.
+- `_o_Generate ULID`'s entropy comes from a single shared `std::mt19937` generator. It is not cryptographically unpredictable or monotonic.
 
 ---
 
-## Generate ULID
+## Obsolete generator
 
 ### Syntax
 
 ```4d
-Generate ULID(ignoredText) → Text
+_o_Generate ULID(ignoredText) → Text
 ```
 
 | Parameter | Type | Description |
@@ -118,7 +149,7 @@ Builds a ULID from system time and non-cryptographic `mt19937` entropy. Same-mil
 
 From the plugin's own test method (`test.4dm`):
 ```4d
-$ULID:=Generate ULID("")
+$ULID:=_o_Generate ULID("")
 ASSERT:C1129(Length:C16($ULID)=26)
 ```
 
@@ -126,7 +157,7 @@ Generating several IDs (sort explicitly if needed):
 ```4d
 ARRAY TEXT:C222($ids;10)
 For:C155($i;1;10)
-	$ids{$i}:=Generate ULID("")
+	$ids{$i}:=_o_Generate ULID("")
 End for:C155
 
 // Same-millisecond legacy IDs are not necessarily sorted.
@@ -199,7 +230,7 @@ $UUID:=ULID to UUID("0001C7STHC0G2081040G208104")
 
 Converting a freshly generated ULID and confirming the expected length:
 ```4d
-$ULID:=Generate ULID("")
+$ULID:=_o_Generate ULID("")
 ASSERT:C1129(Length:C16($ULID)=26)
 $UUID:=ULID to UUID($ULID)
 ASSERT:C1129(Length:C16($UUID)=32)
@@ -228,7 +259,7 @@ Reads the first 48 bits of the ULID — its timestamp field — and formats it a
 
 From the plugin's own test method (`test.4dm`), comparing a freshly generated ULID's timestamp against the current time:
 ```4d
-$ULID:=Generate ULID("")
+$ULID:=_o_Generate ULID("")
 $timestamp0:=ULID Get timestamp($ULID)
 $timestamp1:=Timestamp:C1445
 ASSERT:C1129($timestamp1>=$timestamp0)
@@ -277,7 +308,7 @@ Backdating a batch of ULIDs to a fixed timestamp while keeping each one's own ra
 ```4d
 ARRAY TEXT:C222($ids;5)
 For:C155($i;1;5)
-	$ids{$i}:=ULID Set timestamp(Generate ULID(""); "2020-01-01T00:00:00.000Z")
+	$ids{$i}:=ULID Set timestamp(_o_Generate ULID(""); "2020-01-01T00:00:00.000Z")
 End for:C155
 ```
 
@@ -290,14 +321,14 @@ End for:C155
 - **A `UUID` argument to `ULID from UUID` must be exactly 32 hex characters with no dashes.** Strip any UUID field's formatting before passing it in.
 - **An unparsable `timestamp` in `ULID Set timestamp` silently falls back toward the Unix epoch rather than failing.** If the date/time text before any fractional seconds doesn't match `YYYY-MM-DDTHH:MM:SS`, the command encodes a zero timestamp (`1970-01-01T00:00:00.000Z`) with no indication anything was wrong. Validate your timestamp text yourself if this matters to your use case.
 - **`ULID Get timestamp` can return an empty string for a syntactically valid but extreme timestamp.** A ULID's timestamp field can encode dates far beyond what your OS can represent as a calendar date; in that case the command returns `""` rather than a garbled date.
-- **Don't rely on `Generate ULID`'s randomness for anything security-sensitive.** It's a fast, non-cryptographic generator intended only to make IDs unique, not unpredictable.
+- **Don't rely on `_o_Generate ULID`'s randomness for anything security-sensitive.** It is obsolete, non-cryptographic generation; use `ULID Generate($error)` instead, and never treat ULIDs as secrets.
 
 ---
 
 ## Quick reference
 
 ```4d
-$ULID:=Generate ULID("")
+$ULID:=_o_Generate ULID("")
 $UUID:=ULID to UUID($ULID)
 $ULIDBack:=ULID from UUID($UUID)  // == $ULID
 
