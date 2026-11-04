@@ -14,7 +14,7 @@
         },
         {
             "theme": "ULID",
-            "syntax": "Generate ULID(&T):T",
+            "syntax": "_o_Generate ULID(&T):T",
             "threadSafe": true
         },
         {
@@ -25,6 +25,31 @@
         {
             "theme": "ULID",
             "syntax": "ULID Set timestamp(&T;&T):T",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID Generate(&T):T",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID To blob(&T;&T):O",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID From blob(&O;&T):T",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID Timestamp(&T;&T):8",
+            "threadSafe": true
+        },
+        {
+            "theme": "ULID",
+            "syntax": "ULID Is valid(&T):L",
             "threadSafe": true
         }
     ]

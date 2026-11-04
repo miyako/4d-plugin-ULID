@@ -1,0 +1,8 @@
+# Preserve existing vendored/source/resource bytes, including historical CRLF.
+* -text
+4DPlugin-ULID.cpp whitespace=cr-at-eol
+*.py text eol=lf
+*.yml text eol=lf
+ulid_core.h text eol=lf
+tests/*.cpp text eol=lf
+CMakeLists.txt text eol=lf

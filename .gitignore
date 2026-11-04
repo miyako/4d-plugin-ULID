@@ -6,3 +6,5 @@ ULID/Objs/*
 ULID/test/Plugins/ULID.bundle/Contents/Windows64/ULID.exp
 ULID/test/Plugins/ULID.bundle/Contents/Windows64/ULID.lib
 build/*
+__pycache__/
+*.py[cod]
