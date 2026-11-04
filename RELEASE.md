@@ -184,6 +184,13 @@ dispatching a release. Xcode's numeric `CURRENT_PROJECT_VERSION` is independent
 of `MARKETING_VERSION`; the existing updater treats the marketing version and
 literal Info.plist short version as the release version.
 
+For v1.0.4, update the root `Info.plist` short version and all six Xcode
+`MARKETING_VERSION` fields to `1.0.4`, preserving `CURRENT_PROJECT_VERSION`
+at `1.0.1`. The root plist has no `CFBundleVersion`; do not add one or update
+the historical `test/Plugins` bundle or archives. Merge the reviewed version PR
+before dispatching from updated `main` with tag `v1.0.4` and
+`publication: create-draft`; the tag must match the committed short version.
+
 ## Download verification
 
 From downloaded release assets, run `shasum -a 256 -c SHA256SUMS`. On macOS:
