@@ -171,6 +171,30 @@ asset checksums are generated **after** signing/notarization/stapling.
 `SHA256SUMS` to avoid circular hashes. Signing credentials are removed even on
 failure.
 
+Signing commands print timestamped stage starts/completions without their
+credential arguments. Key import explicitly trusts `/usr/bin/codesign` and
+retains the signing partition list; this does not establish that a previous
+stall was a key-access problem. Each `codesign` signing operation has a
+180-second hard limit (including secure timestamp retrieval); other external
+setup, packaging and verification commands have 120-second limits.
+No retry removes `--timestamp`, hardened runtime, or a verification gate.
+
+Each archive is submitted once without an opaque `--wait`. Its submission ID
+is logged immediately after submission returns; status is polled every 15
+seconds under a 15-minute total deadline, including submission (at most 180
+seconds), individual status requests and terminal diagnostic retrieval (at most
+60 seconds each). Only `Accepted` permits further signing/package steps.
+`Invalid`/`Rejected` retain Apple's diagnostic log; acceptance also retains it.
+Submission responses, last valid statuses and diagnostic JSON are kept in the
+`release-validation` workflow artifact on failure as well as success.
+Timeout, malformed responses, credential failure or rejection fail the step
+and block release creation/publication. Apple may continue processing an
+already submitted request after the local deadline; inspect its recorded ID
+before manually retrying rather than assuming it was canceled.
+The signing step also has a 40-minute ceiling, and the job a 50-minute ceiling;
+bounded credential cleanup remains in both the script exit trap and the
+workflow's always-run cleanup step.
+
 **Windows is unsigned.** No established Authenticode signing mechanism exists in
 this repository. Neither Developer ID signing nor notarization signs the PE
 payload. The release notes and provenance explicitly identify this limitation;
