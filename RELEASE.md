@@ -1,4 +1,4 @@
-# Native CI and signed draft releases
+# Native CI and signed releases
 
 ## Read-only validation
 
@@ -122,9 +122,17 @@ signing/release workflow.
 ## Manual release authorization
 
 No tag push, PR, branch push or version bump initiates signing or publication.
-Only dispatch `Signed draft release` manually, selecting the reviewed source ref,
+Only dispatch `Signed release` manually, selecting the reviewed source ref,
 a **new** `vX.Y.Z` tag matching committed `Info.plist`, and
-`publication: create-draft`. The default `none` fails preflight. The workflow
+an explicit publication mode:
+
+| `publication` | Result |
+| --- | --- |
+| `none` (default) | Fails preflight; no build, signing or release |
+| `create-draft` | Uploads and verifies a draft; leaves it unpublished for manual review |
+| `publish` | Uploads and verifies a draft, then immediately publishes it |
+
+The workflow
 uses the immutable SHA selected by that dispatch for every build and the draft
 release's target; existing tags/releases are never overwritten.
 
@@ -165,15 +173,24 @@ failure.
 
 **Windows is unsigned.** No established Authenticode signing mechanism exists in
 this repository. Neither Developer ID signing nor notarization signs the PE
-payload. The draft notes and provenance explicitly identify this limitation;
+payload. The release notes and provenance explicitly identify this limitation;
 do not describe the cross-platform package as Windows-signed.
 
-After all gates pass, the workflow creates a **draft** GitHub release, downloads
-its assets again and compares every downloaded byte/checksum. It never makes a
-release public. A download/check failure can leave a draft for inspection;
-review/delete that draft manually before retrying. Review the draft, evidence
-and unsigned-Windows notice before a maintainer separately authorizes public
-publication. No workflow should be dispatched merely to test these edits.
+After all signing/package gates pass, the workflow validates the final signed
+asset checksums, creates a **draft** GitHub release at the pinned source SHA,
+uploads assets without overwriting, then downloads all assets again. It requires
+the exact asset set, byte-for-byte equality with the final local assets, and
+matching complete SHA-256 checksums before any public transition.
+Only `publication: publish` then makes this verified draft public as a stable
+(not prerelease) release and explicitly marks it **Latest**, consistent with
+the existing `vX.Y.Z` releases. `create-draft` runs the same verification but
+leaves the release unpublished and does not change Latest.
+An upload/download/check failure leaves any created draft unpublished for
+inspection; review/delete that draft manually before retrying because existing
+tags/releases are never overwritten. Selecting `publish` is authorization for
+the automatic public transition, not just draft creation; no second manual
+publication step is needed. No workflow should be dispatched merely to test
+these edits.
 
 ## Version preparation
 
@@ -189,7 +206,9 @@ For v1.0.4, update the root `Info.plist` short version and all six Xcode
 at `1.0.1`. The root plist has no `CFBundleVersion`; do not add one or update
 the historical `test/Plugins` bundle or archives. Merge the reviewed version PR
 before dispatching from updated `main` with tag `v1.0.4` and
-`publication: create-draft`; the tag must match the committed short version.
+`publication: publish` for immediate publication after verification, or
+`publication: create-draft` for manual review; the tag must match the committed
+short version.
 
 ## Download verification
 

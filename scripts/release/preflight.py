@@ -13,14 +13,15 @@ SECRETS = (
     "APPLE_DEVELOPER_ID_CERTIFICATE", "APPLE_DEVELOPER_ID_CERTIFICATE_PASSWORD",
     "KEYCHAIN_PASSWORD", "NOTARYTOOL_APPLE_ID", "NOTARYTOOL_TEAM_ID", "NOTARYTOOL_PASSWORD",
 )
+PUBLICATIONS = ("create-draft", "publish")
 
 
 def validate(env, plist):
     missing = [key for key in SECRETS if not env.get(key)]
     if missing:
         raise ValueError("Missing required secrets: " + ", ".join(missing))
-    if env.get("PUBLICATION") != "create-draft":
-        raise ValueError("Explicit create-draft authorization required")
+    if env.get("PUBLICATION") not in PUBLICATIONS:
+        raise ValueError("Explicit create-draft or publish authorization required")
     tag = env.get("RELEASE_TAG", "")
     if not re.fullmatch(r"v(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", tag):
         raise ValueError("Tag must be vX.Y.Z")

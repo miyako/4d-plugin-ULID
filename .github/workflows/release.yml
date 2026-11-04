@@ -1,4 +1,4 @@
-name: Signed draft release
+name: Signed release
 
 on:
   workflow_dispatch:
@@ -8,13 +8,14 @@ on:
         required: true
         type: string
       publication:
-        description: Explicit authorization (creates a draft only; never publishes)
+        description: Explicit authorization (publish makes the verified draft public)
         type: choice
         required: true
         default: none
         options:
           - none
           - create-draft
+          - publish
 
 permissions:
   contents: read
@@ -46,7 +47,7 @@ jobs:
   build:
     needs: preflight
     uses: ./.github/workflows/native-build.yml
-  sign-and-draft:
+  sign-and-release:
     needs: [preflight, build]
     runs-on: macos-15
     environment: release
@@ -82,20 +83,14 @@ jobs:
           NOTARYTOOL_TEAM_ID: ${{ secrets.NOTARYTOOL_TEAM_ID }}
           NOTARYTOOL_PASSWORD: ${{ secrets.NOTARYTOOL_PASSWORD }}
         run: bash scripts/release/sign.sh
-      - name: Create draft and verify downloaded asset bytes
+      - name: Upload draft, verify downloaded bytes, and optionally publish
         env:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
           RELEASE_TAG: ${{ inputs.tag }}
           SOURCE_SHA: ${{ github.sha }}
-        run: |
-          set -euo pipefail
-          gh release create "$RELEASE_TAG" dist/* --draft --target "$SOURCE_SHA" --title "$RELEASE_TAG" \
-            --notes "Developer ID signed and notarized macOS universal plugin; Windows x64 plugin is UNSIGNED. See RELEASE.md and attached provenance/checksums. Built from $SOURCE_SHA."
-          mkdir downloaded-release
-          gh release download "$RELEASE_TAG" --dir downloaded-release
-          (cd downloaded-release && shasum -a 256 -c SHA256SUMS)
-          python3 -c "import pathlib; a=pathlib.Path('dist'); b=pathlib.Path('downloaded-release'); assert {p.name:p.read_bytes() for p in a.iterdir()} == {p.name:p.read_bytes() for p in b.iterdir()}, 'Draft assets differ'"
+          PUBLICATION: ${{ inputs.publication }}
+        run: python3 scripts/release/publication.py
       - name: Retain validation evidence
         if: always()
         uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
