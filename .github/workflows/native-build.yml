@@ -1,0 +1,56 @@
+name: Reusable native build
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-15
+            target: macos
+          - os: windows-latest
+            target: windows
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Test release tooling and host harness
+        run: |
+          python -m unittest discover -s scripts/release -p "test_*.py" -v
+          python -m unittest discover -s tests -p "test_*.py" -v
+      - name: Configure macOS universal
+        if: runner.os == 'macOS'
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release "-DCMAKE_OSX_ARCHITECTURES=arm64;x86_64" -DCMAKE_OSX_DEPLOYMENT_TARGET=11.5
+      - name: Configure Windows x64
+        if: runner.os == 'Windows'
+        run: cmake -S . -B build -A x64 -DCMAKE_BUILD_TYPE=Release
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Native tests
+        run: ctest --test-dir build -C Release --output-on-failure --no-tests=error
+      - name: Validate and record native artifact
+        env:
+          SOURCE_SHA: ${{ github.sha }}
+          TARGET: ${{ matrix.target }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python scripts/release/artifacts.py record --bundle build/package/ULID.bundle --target "$TARGET" --sha "$SOURCE_SHA" --manifest build/package/provenance.json
+          python scripts/release/artifacts.py verify --bundle build/package/ULID.bundle --target "$TARGET" --sha "$SOURCE_SHA" --manifest build/package/provenance.json
+          python -c "import tarfile; t=tarfile.open('build/native.tar','w'); t.add('build/package/ULID.bundle',arcname='ULID.bundle'); t.add('build/package/provenance.json',arcname='provenance.json'); t.close()"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: native-${{ matrix.target }}
+          path: build/native.tar
+          if-no-files-found: error
+          retention-days: 7

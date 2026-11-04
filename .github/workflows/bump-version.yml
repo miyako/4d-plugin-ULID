@@ -5,13 +5,12 @@
 #   3. force-write that exact string into every version field (pbxproj's
 #      MARKETING_VERSION/CURRENT_PROJECT_VERSION AND Info.plist's
 #      CFBundleShortVersionString/CFBundleVersion)
-#   4. commit, then tag "vX.Y.Z" from that same string
+#   4. upload a patch for manual review (no commit, tag or push)
 # Step 3 pattern-matches each key rather than matching the old literal
 # value, so a field that already drifted out of sync gets pulled back
 # into line instead of being silently skipped.
 #
-# That tag push is what triggers release.yml - this workflow does NOT
-# build or release anything itself.
+# This workflow never changes the remote repository or triggers a release.
 #
 # Run it manually from the Actions tab whenever you're ready to cut a release.
 
@@ -31,7 +30,7 @@ on:
         required: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   # ---- edit these per-project ----
@@ -44,9 +43,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
-          fetch-depth: 0
+          persist-credentials: false
 
       - name: read current version & check for drift
         id: current
@@ -72,15 +71,12 @@ jobs:
           # automatically when it copies the plist into the built bundle.
           # That form is in sync by construction - don't compare it as a
           # literal version string, and never overwrite it later.
-          case "$PLIST_VERSION" in
-            '$('*')')
-              echo "Info.plist CFBundleShortVersionString is a build-variable reference (${PLIST_VERSION}) - Xcode keeps it in sync automatically."
-              PLIST_IS_VARIABLE=true
-              ;;
-            *)
-              PLIST_IS_VARIABLE=false
-              ;;
-          esac
+          if [[ "$PLIST_VERSION" == \$\(*\) ]]; then
+            echo "Info.plist CFBundleShortVersionString is a build-variable reference (${PLIST_VERSION}) - Xcode keeps it in sync automatically."
+            PLIST_IS_VARIABLE=true
+          else
+            PLIST_IS_VARIABLE=false
+          fi
 
           if [ "$PLIST_IS_VARIABLE" = true ]; then
             UNIQUE=$(printf '%s\n' "$VALUES" | sort -u)
@@ -97,22 +93,25 @@ jobs:
 
           CURRENT=$(printf '%s' "$UNIQUE" | head -n1)
           echo "Current version (consistent everywhere): $CURRENT"
-          echo "key=$KEY" >> "$GITHUB_OUTPUT"
-          echo "current=$CURRENT" >> "$GITHUB_OUTPUT"
-          echo "plist_is_variable=$PLIST_IS_VARIABLE" >> "$GITHUB_OUTPUT"
+          {
+            echo "key=$KEY"
+            echo "current=$CURRENT"
+            echo "plist_is_variable=$PLIST_IS_VARIABLE"
+          } >> "$GITHUB_OUTPUT"
 
-      - name: bump version everywhere & tag
+      - name: prepare version update patch
         id: bump
         env:
           KEY: ${{ steps.current.outputs.key }}
           CURRENT: ${{ steps.current.outputs.current }}
           PLIST_IS_VARIABLE: ${{ steps.current.outputs.plist_is_variable }}
+          BUMP_MODE: ${{ inputs.mode }}
         run: |
           set -euo pipefail
           PBXPROJ="${XCODE_PROJECT}/project.pbxproj"
 
           IFS='.' read -r MAJOR MINOR PATCH <<< "$CURRENT"
-          case "${{ inputs.mode }}" in
+          case "$BUMP_MODE" in
             major) MAJOR=$((MAJOR+1)); MINOR=0; PATCH=0 ;;
             minor) MINOR=$((MINOR+1)); PATCH=0 ;;
             patch) PATCH=$((PATCH+1)) ;;
@@ -130,19 +129,17 @@ jobs:
             NEW="$NEW" python3 -c "import plistlib, os; path = os.environ['INFO_PLIST']; d = plistlib.load(open(path, 'rb')); new = os.environ['NEW']; d['CFBundleShortVersionString'] = new; d.update({'CFBundleVersion': new} if 'CFBundleVersion' in d else {}); plistlib.dump(d, open(path, 'wb'))"
           fi
 
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          if [ "$PLIST_IS_VARIABLE" = "true" ]; then
-            git add "$PBXPROJ"
-          else
-            git add "$PBXPROJ" "$INFO_PLIST"
-          fi
-          git commit -m "chore: bump version to ${NEW}"
-          git tag "v${NEW}"
-          git push origin HEAD:"${GITHUB_REF_NAME}"
-          git push origin "v${NEW}"
+          git diff -- "$PBXPROJ" "$INFO_PLIST" > version.patch
+          test -s version.patch
 
           echo "version=${NEW}" >> "$GITHUB_OUTPUT"
 
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: version-update-patch
+          path: version.patch
+          if-no-files-found: error
       - name: summary
-        run: echo "### Bumped to v${{ steps.bump.outputs.version }} - release.yml will pick up the pushed tag." >> "$GITHUB_STEP_SUMMARY"
+        env:
+          NEW_VERSION: ${{ steps.bump.outputs.version }}
+        run: echo "### Prepared v$NEW_VERSION patch. Apply, review and commit manually; no tag or release was created." >> "$GITHUB_STEP_SUMMARY"
